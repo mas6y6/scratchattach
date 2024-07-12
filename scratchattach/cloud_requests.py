@@ -2,12 +2,14 @@
 from . import cloud
 import time
 from .encoder import *
+from . import project
 import math
 from threading import Thread
 import json
 import traceback
 import warnings
 from . import exceptions
+import requests
 
 class CloudRequests:
     """
@@ -17,6 +19,17 @@ class CloudRequests:
         def __init__(self, **entries):
             self.__dict__.update(entries)
             self.id = self.request_id
+    
+    def credit_check(self):
+        try:
+            p = project.get_project(self.project_id)
+            description = (str(p.instructions) + str(p.notes)).lower()
+            if not ("timmccool" in description or "timmcool" in description or "timccool" in description or "timcool" in description):
+                print("It was detected that no credit was given in the project description! Please credit TimMcCool when using CloudRequests.")
+            else:
+                print("Thanks for giving credit for CloudRequests!")
+        except Exception:
+            print("If you use CloudRequests, please credit TimMcCool!")
 
     def init_attributes(self):
         self.last_requester = None
@@ -32,6 +45,8 @@ class CloudRequests:
         self.current_var = 0
         self.idle_since = 0
         self.force_reconnect = False
+        self.cloud_events = []
+        self.kill_signal = False
 
     def __init__(self,
                  cloud_connection: cloud.CloudConnection,
@@ -43,9 +58,6 @@ class CloudRequests:
                  _packet_length=245,
                  **kwargs
                  ):
-        print(
-            "\033[1mIf you use CloudRequests in your Scratch project, please credit TimMcCool!\033[0m"
-        )
         if _log_url != "https://clouddata.scratch.mit.edu/logs":
             warnings.warn(
                 "Log URL isn't the URL of Scratch's clouddata logs. Don't use the _log_url parameter unless you know what you are doing",
@@ -58,6 +70,7 @@ class CloudRequests:
         self.used_cloud_vars = used_cloud_vars
         self.connection = cloud_connection
         self.project_id = cloud_connection.project_id
+        self.credit_check()
 
         self.ignore_exceptions = ignore_exceptions
         self.log_url = _log_url
@@ -245,7 +258,9 @@ class CloudRequests:
         Sends back the request response to the Scratch project
         """
 
-        if self.idle_since + 8 < time.time() or self.force_reconnect:
+        if (self.idle_since + 8 < time.time() #and not isinstance(self.connection, cloud.TwCloudConnection)
+            ) or self.force_reconnect:
+            self.connection.disconnect()
             self.connection._connect(cloud_host=self.connection.cloud_host)
             self.connection._handshake()
 
@@ -294,7 +309,8 @@ class CloudRequests:
     def run(self,
             thread=False,
             data_from_websocket=True,
-            no_packet_loss=False):
+            no_packet_loss=False,
+            daemon=False):
         '''
         Starts the request handler.
         
@@ -320,14 +336,26 @@ class CloudRequests:
             ]
         else:
             events = []
+        self.cloud_events = events
         if thread:
             thread = Thread(
                 target=self._run,
                 args=[events],
-                kwargs={"data_from_websocket": data_from_websocket})
+                kwargs={"data_from_websocket": data_from_websocket},
+                daemon=daemon
+            )
             thread.start()
         else:
             self._run(events, data_from_websocket=data_from_websocket)
+    
+    def stop(self):
+        """
+        Permanently stops the cloud request handler and all background threads with cloud events.
+        Only works if cloud requests were run with thread=True
+        """
+        self.kill_signal = True
+        for event in self.cloud_events:
+            event.stop()
 
     def call_event(self, event, args=[]):
         """
@@ -359,7 +387,7 @@ class CloudRequests:
             except Exception:
                 send_as_integer = False
             else:
-                send_as_integer = not "-" in str(output)
+                send_as_integer = not ("-" in str(output)) and not (type(output)==bool)
         else:
             send_as_integer = False
 
@@ -396,8 +424,9 @@ class CloudRequests:
                 self.ws_data.append(event)
 
         try:
-            self.connection._connect(cloud_host=self.connection.cloud_host)
-            self.connection._handshake()
+            if self.connection.is_closed:
+                self.connection._connect(cloud_host=self.connection.cloud_host)
+                self.connection._handshake()
         except Exception:
             self.call_event("on_disconnect")
 
@@ -427,7 +456,8 @@ class CloudRequests:
         while True:
 
             time.sleep(0.001)
-
+            if self.kill_signal:
+                return
             if data_from_websocket is False:
                 # If the data shouldn't be fetched from the cloud websocket, it fetches the cloud logs to get data
                 clouddata = cloud.get_cloud_logs(
@@ -448,6 +478,8 @@ class CloudRequests:
             current_ws_data = list(self.ws_data)
             self.ws_data = []
             while current_ws_data != []:
+                if self.kill_signal:
+                    return
                 event = current_ws_data.pop(0)
 
                 try:
@@ -536,6 +568,8 @@ class CloudRequests:
             while len(list(self.outputs.keys())) > 0:
                 output_ids = list(self.outputs.keys())
                 for request_id in output_ids:
+                    if self.kill_signal:
+                        return
                     output = self.outputs[request_id]["output"]
                     request = self.outputs[request_id]["request"]["name"]
                     req_obj = self.outputs[request_id]["request"]
@@ -553,9 +587,6 @@ class TwCloudRequests(CloudRequests):
                  ignore_exceptions=True,
                  _force_reconnect = False, # this argument is no longer used and only exists for backwards compatibility
                  _packet_length=98800):
-        print(
-            "\033[1mIf you use CloudRequests in your Scratch project, please credit TimMcCool!\033[0m"
-        )
         if _packet_length > 98800:
             warnings.warn(
                 "The packet length was set to a value higher than TurboWarp's default (98800).",
@@ -563,9 +594,18 @@ class TwCloudRequests(CloudRequests):
         self.used_cloud_vars = used_cloud_vars
         self.connection = cloud_connection
         self.project_id = cloud_connection.project_id
+        self.credit_check()
 
         self.ignore_exceptions = ignore_exceptions
         self.packet_length = _packet_length
+
+        # user agent data
+        if isinstance(cloud_connection, cloud.TwCloudConnection):
+            self.purpose = cloud_connection.purpose
+            self.contact = cloud_connection.contact
+        else:
+            self.purpose = ""
+            self.contact = ""
 
         self.init_attributes()
 
@@ -575,7 +615,9 @@ class TwCloudRequests(CloudRequests):
     def run(self,
             thread=False,
             data_from_websocket=True,
-            no_packet_loss=False):
+            no_packet_loss=False,
+            daemon=False
+            ):
         '''
         Starts the request handler.
         
@@ -585,9 +627,10 @@ class TwCloudRequests(CloudRequests):
             no_packet_loss: Whether the request handler should reconnect to the cloud websocket before responding to a request, this can help to avoid packet loss.
         '''
         self.force_reconnect = no_packet_loss
-        events = [cloud.TwCloudEvents(self.project_id, update_interval=0)]
+        events = [cloud.TwCloudEvents(self.project_id, update_interval=0, purpose=self.purpose, contact=self.contact)]
+        self.cloud_events = events
         if thread:
-            thread = Thread(target=self._run, args=[events])
+            thread = Thread(target=self._run, args=[events], daemon=daemon)
             thread.start()
         else:
             self._run(events)

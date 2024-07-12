@@ -1,3 +1,19 @@
+# 1.7.3
+
+- Added `project.get_comment` and `studio.get_comment` functions (allow getting a comment by id)
+- Added `user.does_exist()` and `user.is_new_scratcher()` functions
+- Added `user.set_forum_signature("new_signature")` function - allows setting forum signature of logged in user
+
+# 1.6.2
+
+- Added `client.stop()` to cloud requests (will stop cloud request handler and all background event handlers)
+- You can now access the letters used by the encoder: `scratch3.encoder.letters`
+- Added `scratch3.Encoding.replace_char("old_char", "new_char")`
+- Added `studio.accept_invite()`
+- Added `project.upload_json_from("other_project_id")`
+- `scratch3.connect_tw_cloud("project_id")` - "project_id" arg can now be a non-integer
+- Added `daemon` argument to `client.run()` (cloud requests)
+
 # 1.5.1
 
 - Added `session.connect_tw_cloud` function which was mentioned in the documentation but missing in the code
